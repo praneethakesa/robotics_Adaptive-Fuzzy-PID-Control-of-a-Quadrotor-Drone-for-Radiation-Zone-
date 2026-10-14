@@ -1,0 +1,219 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,enumitem}
+\usepackage[colorlinks=true,linkcolor=black]{hyperref}
+\setlength{\parskip}{4pt}\setlength{\parindent}{0pt}
+\newcommand{\dd}[1]{\dot{#1}}
+\begin{document}
+
+{\LARGE\bfseries Dynamics and Control of a Radiation-Zone Inspection Robot}\\[2pt]
+{\large Mathematical model, adaptive fuzzy-PID heading control, stability analysis and data connection}\\[2pt]
+Dynamics and Control of Robotics
+
+\section{Problem and assumptions}
+A differential-drive ground robot must visit a list of inspection points inside a damaged reactor building. The floor has rubble patches where the wheels slip, falling debris knocks the robot sideways, and the heading sensor is noisy. The robot has no pre-drawn path; a planner computes the desired heading online and a controller makes the robot follow it.
+
+\textbf{Assumptions.} Planar motion; rigid body; centre of mass at the midpoint of the wheel axle; rolling without lateral slip (non-holonomic constraint); viscous friction; wheel slip modelled by a traction ratio $\kappa$.
+
+\textbf{Symbols.} $(x,y)$ position, $\theta$ heading, $v$ forward speed, $\omega$ yaw rate, $m$ mass, $I$ yaw inertia, $r$ wheel radius, $L$ track width, $b,c$ translational and rotational viscous friction, $\tau_R,\tau_L$ right and left wheel torques.
+
+\section{Kinematics}
+With $q=[x\;y\;\theta]^\top$ and $\eta=[v\;\omega]^\top$:
+\begin{equation}
+\dd x=v\cos\theta,\qquad \dd y=v\sin\theta,\qquad \dd\theta=\omega+d_w(t)
+\label{eq:kin}
+\end{equation}
+The no-side-slip constraint is $\dd x\sin\theta-\dd y\cos\theta=0$. The term $d_w(t)$ is the yaw-rate kick from a debris strike (a pulse of $\pm1.5$ rad/s for 0.3 s).
+
+\section{Dynamics}
+\subsection{Newton--Euler}
+Wheel torques produce a net traction force and a yaw moment:
+\begin{equation}
+F=\frac{\tau_R+\tau_L}{r},\qquad M=\frac{L}{2r}\,(\tau_R-\tau_L)
+\end{equation}
+\begin{equation}
+m\,\dd v=F-b\,v,\qquad I\,\dd\omega=M-c\,\omega
+\label{eq:ne}
+\end{equation}
+Inverting the wheel map gives the torques needed for a given $F$ and $M$:
+\begin{equation}
+\tau_R=\frac{rF}{2}+\frac{rM}{L},\qquad \tau_L=\frac{rF}{2}-\frac{rM}{L}
+\end{equation}
+
+\subsection{Euler--Lagrange check}
+Kinetic energy $T=\tfrac12 m(\dd x^2+\dd y^2)+\tfrac12 I\dd\theta^2$ with the constraint $A(q)\dd q=0$, $A=[\sin\theta\;-\!\cos\theta\;0]$. Writing $\dd q=S(q)\eta$ with $S=\begin{bmatrix}\cos\theta&0\\ \sin\theta&0\\ 0&1\end{bmatrix}$ and eliminating the constraint force gives $S^\top M_q S\,\dd\eta+S^\top M_q\dd S\,\eta=S^\top B\tau$. With the centre of mass on the axle, $S^\top M_q\dd S=0$, so there are no Coriolis terms and the result is exactly \eqref{eq:ne}.
+
+\subsection{Inner velocity servos and slip}
+Each axis has an inner servo with friction feed-forward:
+\begin{equation}
+F=b\,v+K_v(\kappa v_{ref}-v),\qquad M=c\,\omega+K_\omega(\kappa\,\omega_{ref}-\omega),\qquad K_v=\frac{m}{\tau_v},\;K_\omega=\frac{I}{\tau_w}
+\end{equation}
+Substituting into \eqref{eq:ne}, the friction terms cancel and
+\begin{equation}
+\tau_v\,\dd v+v=\kappa\,v_{ref},\qquad \tau_w\,\dd\omega+\omega=\kappa\,\omega_{ref}
+\label{eq:lag}
+\end{equation}
+$\kappa\in(0,1]$ is the traction ratio: ground speed equals $\kappa$ times the commanded wheel surface speed ($\kappa=1$ on clear floor, $\kappa=0.6$ on rubble). So rubble does not change the dynamics' time constant in this model; it removes 40\% of the actuation gain. The controller output is $\omega_{ref}$.
+
+\textbf{Parameters.} $m=15$ kg, $I=0.70$ kg\,m$^2$, $r=0.10$ m, $L=0.40$ m, $b=4$ N\,s/m, $c=0.8$ N\,m\,s/rad, $\tau_v=0.20$ s, $\tau_w=0.15$ s, giving $K_v=75$ N\,s/m and $K_\omega=4.67$ N\,m\,s/rad. $v_{ref}=0.6$ m/s, $|\omega_{ref}|\le2$ rad/s.
+
+\section{Dynamic route: planner}
+The map contains only obstacles that have come within the sensing range (3 m). With goal direction $u=(g-p)/\|g-p\|$, and for each mapped obstacle $i$ with surface clearance $d_i=\|p-o_i\|-\rho_i-R_{robot}$, unit outward normal $n_i$ and tangent $t_i$ (oriented so $t_i\!\cdot u\ge0$):
+\begin{equation}
+f=u+\sum_{d_i<D_0}K_{rep}\left(\frac1{d_i}-\frac1{D_0}\right)(0.6\,n_i+0.8\,t_i),\qquad \psi_d=\operatorname{atan2}(f_y,f_x)
+\end{equation}
+$D_0=1.5$ m, $K_{rep}=0.45$. The heading error is $e=\operatorname{wrap}(\psi_d-\theta-\nu(t))$ where $\nu$ is sensor noise (amplitude 0.015 rad).
+
+\section{Controllers}
+\subsection{Fixed PID}
+\begin{equation}
+\omega_{ref}=\operatorname{sat}_{\pm2}\!\Big(K_p e+K_i\!\int e\,dt+K_d\,\dd e_f\Big),\qquad K_p=2.0,\;K_i=0.15,\;K_d=0.25
+\end{equation}
+The derivative uses a first-order filter ($T_f=0.04$ s) and the integral is clamped to $\pm0.5$ (anti-windup).
+
+\subsection{Adaptive fuzzy-PID (gain scheduling)}
+The gains are scaled online: $K_p=K_{p0}s_p$, $K_i=K_{i0}s_i$, $K_d=K_{d0}s_d$. Inputs are normalised magnitudes $\varepsilon=|e|/0.6$ and $\delta=|\dd e_f|/1.5$ (clipped to $[0,1]$), each with three triangular sets Small, Medium, Large:
+\begin{equation}
+\mu_S(u)=\max(0,1-2u),\quad \mu_M(u)=\max(0,1-2|u-\tfrac12|),\quad \mu_L(u)=\max(0,2u-1)
+\end{equation}
+Rule firing strength $w_{jk}=\mu_j(\varepsilon)\mu_k(\delta)$; the Sugeno output is $s=\sum_{j,k}w_{jk}\,c_{jk}$ with
+\begin{equation}
+c^{(p)}=\begin{bmatrix}0.8&0.9&1.0\\1.2&1.3&1.4\\1.6&1.8&2.0\end{bmatrix},\;
+c^{(d)}=\begin{bmatrix}0.8&1.2&1.6\\0.8&1.4&1.8\\0.8&1.5&2.0\end{bmatrix},\;
+s_i=\sum_j\mu_j(\varepsilon)\,[1,\,0.5,\,0]_j
+\end{equation}
+(rows: $\varepsilon$ Small/Medium/Large; columns: $\delta$ Small/Medium/Large). Reading: a big, fast-changing error raises $K_p$ and $K_d$ and switches $K_i$ off to avoid windup; a small error keeps the gains low so the robot stays smooth.
+
+\section{Linearisation and stability}
+Linearising about straight motion and ignoring $d_w$ and $\nu$, from \eqref{eq:kin} and \eqref{eq:lag}:
+\begin{equation}
+G(s)=\frac{\theta(s)}{\omega_{ref}(s)}=\frac{\kappa}{s\,(\tau_w s+1)},\qquad C(s)=K_p+\frac{K_i}{s}+\frac{K_d\,s}{T_f s+1},\qquad L(s)=C(s)G(s)
+\end{equation}
+With an ideal derivative the characteristic polynomial is
+\begin{equation}
+\tau_w s^3+(1+\kappa K_d)\,s^2+\kappa K_p\,s+\kappa K_i=0
+\end{equation}
+\textbf{Routh--Hurwitz.} All coefficients positive and
+\begin{equation}
+(1+\kappa K_d)\,\kappa K_p>\tau_w\,\kappa K_i\;\Longleftrightarrow\;(1+\kappa K_d)K_p>\tau_w K_i
+\end{equation}
+For the base gains with $\kappa=0.6$: $(1+0.15)(2.0)=2.30>0.15\times0.15=0.0225$, stable with a very large margin.
+
+\textbf{Effect of slip and of the adaptation} (full filtered loop, computed numerically):
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{5.2cm}cccc@{}}
+\toprule
+Operating point & $K_p,K_i,K_d$ & crossover & phase margin & closed-loop poles\\
+\midrule
+Fixed, clear floor ($\kappa=1$) & 2.0, 0.15, 0.25 & 1.99 rad/s & 85.0$^\circ$ & $-0.08,-1.97,-7.2,-22.5$\\
+Fixed, rubble ($\kappa=0.6$) & 2.0, 0.15, 0.25 & 1.19 rad/s & 84.7$^\circ$ & $-0.08,-1.14,-6.9,-23.5$\\
+Adaptive, rubble, large fast error & 3.6, 0, 0.375 & 2.14 rad/s & 84.4$^\circ$ & $-2.45,-6.5,-22.8$\\
+Adaptive, clear, small error & 1.6, 0.15, 0.20 & 1.59 rad/s & 84.4$^\circ$ & $-0.10,-1.53,-7.0,-23.0$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Interpretation: slip ($\kappa=0.6$) scales the loop gain and drops the crossover frequency from 1.99 to 1.19 rad/s, so the robot responds more slowly exactly when the floor is worst. When the error is large the scheduler raises $K_p$ and $K_d$ by 1.8 and 1.5, which brings the crossover back to 2.14 rad/s (above the clear-floor value) with the phase margin unchanged at about 84$^\circ$. When the error is small the gains drop, which keeps the response smooth. All 16 corners of the scheduling range ($\kappa\in\{0.6,1\}$, $s_p,s_d\in\{0.8,2.0\}$, $s_i\in\{0,1\}$) have all poles in the left half plane.
+
+\textbf{Limitation.} This is a frozen-gain check at each operating point. It does not by itself prove stability of the time-varying fuzzy law, which would need slowly varying gains or a Lyapunov argument. Stability of the nonlinear closed loop is demonstrated by simulation, not proved.
+
+\section{Radiation sensing model and data connection}
+\subsection{Dose field}
+For hidden sources at $s_k$, the dose rate at position $p$ is
+\begin{equation}
+D(p)=D_0+\sum_k\frac{S}{1+(\|p-s_k\|/w)^2},\qquad D_0=0.1,\;S=45,\;w=0.8\text{ m}
+\end{equation}
+A hot zone is declared when $D>12$. The estimated hotspot is the dose-weighted centroid of one run of consecutive samples above the threshold, $\hat p=\sum_i D_i p_i/\sum_i D_i$. This is biased toward the robot's path (the path passes about 0.6--1 m from each source), so a position error of that order is expected.
+
+\subsection{Actuator identification from data}
+From logged step tests $(t_j,u_j,y_j)$ of commanded and measured yaw rate, fit $y(t)=\kappa u_0(1-e^{-(t-t_0)/\tau_w})$ by least squares:
+\begin{equation}
+(\hat\kappa,\hat\tau_w)=\arg\min_{\kappa,\tau}\sum_j\big(y_j-\kappa u_0(1-e^{-(t_j-t_0)/\tau})\big)^2
+\end{equation}
+Then $K_\omega=I/\hat\tau_w$ follows from Section 3, and $\hat\kappa$ measured on a rubble surface is the slip ratio used in the model.
+
+\textbf{Important.} The two data files in \texttt{matlab/data/} are \emph{synthetic}: they were generated from the model plus noise so the pipeline runs out of the box. On those files the fit recovers $\hat\kappa=1.00,\hat\tau_w=0.152$ s (clear) and $\hat\kappa=0.60,\hat\tau_w=0.147$ s (rubble), which only confirms the code works, not that the model matches a real robot. To connect real data, log the same columns from the real robot or from a simulator such as Webots and replace the file; the scripts need no other change.
+
+\section{Results of the nonlinear mission simulation}
+Euler integration at 10 ms; all disturbances active; both controllers use the same base gains.
+\begin{center}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+ & Fixed PID & Adaptive fuzzy-PID\\
+\midrule
+Mission time & 47.4 s & 47.3 s\\
+Inspection points reached & 5/5 & 5/5\\
+Leaks found / obstacles mapped & 3/3, 10/10 & 3/3, 10/10\\
+Closest approach to rubble & 21 cm & 22 cm\\
+Mean heading error & 0.107 rad & 0.099 rad (7\% lower)\\
+Peak heading error & 0.91 rad & 0.87 rad (4\% lower)\\
+Peak wheel torque & 2.49 N\,m & 2.49 N\,m\\
+\bottomrule
+\end{tabular}
+\end{center}
+Both controllers complete the mission safely; the adaptive one is modestly better at recovering from hits. The size of the improvement depends on the chosen gains, disturbances and tables, so it should be quoted as a result of this setup, not as a general claim.
+
+\section{What is and is not modelled (planar mission, Sections 1--8)}
+Modelled: rigid-body dynamics, actuator servos, slip, impacts as yaw-rate kicks, sensor noise, online mapping and replanning, radiation field. The planar mission has no terrain height, no motor torque limits, no lidar map and a reactive planner that can get trapped in a dead end; Section~\ref{sec:adv} adds all of these.
+
+\section{Advanced extension: terrain, torque limits, lidar map, global planner}\label{sec:adv}
+The planar mission above is left unchanged. A second scenario (\texttt{world\_hard.m}: 25 obstacles, four height mounds, rubble patches and a U-shaped dead end with the last inspection point behind it) removes the main limitations.
+
+\subsection{3D terrain and gravity}
+The height map is $z(x,y)=\sum_k h_k\exp\!\big(-\|(x,y)-c_k\|^2/(2s_k^2)\big)$. With $\nabla z=(z_x,z_y)$, the slope along the heading and the tilt are
+\begin{equation}
+\sin\varphi=\frac{\nabla z\cdot(\cos\theta,\sin\theta)}{\sqrt{1+(\nabla z\cdot(\cos\theta,\sin\theta))^2}},\qquad \text{tilt}=\arctan\|\nabla z\|
+\end{equation}
+Gravity enters the translational equation, and slope also reduces traction:
+\begin{equation}
+m\dot v=F-bv-mg\sin\varphi,\qquad \kappa_{\rm eff}=\kappa\,(1-0.8\,\|\nabla z\|)
+\end{equation}
+The speed servo gets a pitch feed-forward, $F=bv+mg\sin\varphi+K_v(\kappa v_{\rm ref}-v)$, in the same way as the friction feed-forward.
+
+\subsection{Motor torque limits}
+The wheel torques from Eq.~(4) are saturated, $|\tau_R|,|\tau_L|\le\tau_{\max}$, and $F$, $M$ are recomputed from the limited torques with Eq.~(2). When a limit is hit the servo can no longer cancel gravity or friction, so the speed and turn rate lag the command. Limits: $\tau_{\max}=3$~N\,m (wheeled), $4$~N\,m (tracked).
+
+\subsection{Lidar, occupancy grid and two-layer planner}
+A 2D lidar (90 rays, 4~m, 10~Hz) marks hit cells of a $0.2$~m occupancy grid (static world, binary). Terrain cells steeper than the drive's climbable slope are also marked untraversable when within sensor range (a depth sensor is assumed). The grid is inflated by $0.65$~m and A* (8-connected, no corner cutting, cost $1+8\|\nabla z\|$, unknown cells free) is re-run every 0.5~s. The point 1.5~m ahead on the path becomes the target of the reactive layer, which is Eq.~(7) with repulsion from the nearest mapped cell (gain halved). The heading PID or adaptive fuzzy-PID is unchanged. With the global layer off, the target is the waypoint itself (reactive-only).
+
+\subsection{Drive type}
+\texttt{wheeled}: $\kappa_{\rm rubble}=0.6$, slope limit 0.20, $\tau_{\max}=3$. \texttt{tracked}: $\kappa_{\rm rubble}=0.8$, slope limit 0.45, $\tau_{\max}=4$. This is a parameter change only, not a track--terrain contact model.
+
+\subsection{Results}
+\begin{center}
+\small\begin{tabular}{@{}lllcc@{}}
+\toprule
+Drive & Planner & Outcome & Time [s] & Mean $|e|$ fixed / adaptive [rad]\\
+\midrule
+wheeled & reactive-only & hits dead end, 3/4 points & 45 & 0.384 / 0.385\\
+wheeled & A* + reactive & 4/4 points, 29--31 cm clear & 74.4 / 74.5 & 0.217 / 0.210\\
+tracked & reactive-only & hits dead end, 3/4 points & 39 & 0.151 / 0.135\\
+tracked & A* + reactive & 4/4 points, 39 cm clear & 64.2 / 64.5 & 0.194 / 0.183\\
+\bottomrule
+\end{tabular}
+\end{center}
+Without the global layer the robot drives into the back wall of the U (it never stops, so the run ends as a collision); with A* it sees the wall, replans and goes around. Wheeled reactive-only also drives over the steep pile (22$^\circ$ tilt, below the 25$^\circ$ warning level), while A* avoids it. The tracked robot's shorter time comes from less slip and a higher torque limit. The adaptive controller's mean heading error is 3--6\% lower with A*, the same size of effect as in Section~8.
+
+\subsection{Remaining limits}
+This is one fixed layout, not a statistical study. Both runs find 2 of 3 leaks because the replanned route passes more than 1.3~m from one source. Tilt is reported but there is no tip-over dynamics. Getting stuck is only represented through the slope and torque limits, not by wheel--debris contact. The lidar map is binary and assumes a static world with known pose, so it is not full SLAM. No real or Webots data are included; the CSV scripts accept real logs in the same format.
+
+\section*{MATLAB files}
+\begin{tabular}{@{}ll@{}}
+\texttt{robot\_params.m} & all parameters\\
+\texttt{robot\_accel.m} & Newton--Euler dynamics with servos\\
+\texttt{simulate\_mission.m} & nonlinear simulation, planner, sensing\\
+\texttt{fuzzy\_scales.m} & Sugeno fuzzy gain scheduler\\
+\texttt{analyze\_stability.m} & $G(s)$, Routh--Hurwitz, poles, Bode, step, root locus\\
+\texttt{identify\_actuator.m} & least-squares identification from CSV\\
+\texttt{analyze\_radiation.m} & hotspot estimation from CSV\\
+\texttt{run\_mission.m}, \texttt{compare\_pid.m} & fixed vs adaptive plots and metrics\\
+\texttt{adv\_params.m}, \texttt{world\_hard.m} & advanced scenario parameters and world\\
+\texttt{simulate\_advanced.m} & terrain, torque limits, lidar map, A* + reactive\\
+\texttt{compare\_advanced.m} & advanced scenario comparison\\
+\texttt{demo\_key\_values.m}, \texttt{run\_all.m} & demo and driver\\
+\end{tabular}
+
+\end{document}
